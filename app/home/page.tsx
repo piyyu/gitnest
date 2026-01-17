@@ -50,19 +50,71 @@ export default function Home() {
     }
   }
 
+  const [loadingChapter, setLoadingChapter] = useState(false);
+
+  async function handleChapterSelect(chapter: any) {
+    // If we already have content, just select it
+    if (chapter.content) {
+      setSelectedChapter(chapter);
+      return;
+    }
+
+    // Otherwise, generate it
+    setLoadingChapter(true);
+    // Temporarily set selected chapter to show loading state in UI
+    setSelectedChapter(chapter);
+
+    try {
+      const res = await fetch("/api/tutorial/chapter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chapter,
+          repoData
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("Failed to generate chapter content");
+        setLoadingChapter(false);
+        return;
+      }
+
+      const { content } = await res.json();
+
+      // Update the chapters array with the new content
+      setChapters((prev) =>
+        prev.map((c) =>
+          c.id === chapter.id ? { ...c, content } : c
+        )
+      );
+
+      // Update the selected chapter
+      setSelectedChapter({ ...chapter, content });
+
+    } catch (e) {
+      console.error("Error generating chapter:", e);
+    } finally {
+      setLoadingChapter(false);
+    }
+  }
+
 
   return (
     <main className="h-screen w-screen bg-[url('/bg.webp')] bg-cover bg-center overflow-hidden flex items-center p-4 gap-6">
       {chapters.length > 0 && (
         <Sidebar
           chapters={chapters}
-          onSelectChapter={setSelectedChapter}
+          onSelectChapter={handleChapterSelect}
           selectedChapterId={selectedChapter?.id}
         />
       )}
 
       {selectedChapter ? (
-        <TutorialDetails chapter={selectedChapter} />
+        <TutorialDetails
+          chapter={selectedChapter}
+          isLoading={loadingChapter}
+        />
       ) : (
         <div className="flex-1 h-full flex items-center justify-center p-4">
           <div
