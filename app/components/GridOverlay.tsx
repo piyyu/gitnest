@@ -18,12 +18,13 @@ export default function GridOverlay() {
 
     let lastCellX = -1;
     let lastCellY = -1;
+    let lastScrollX = typeof window !== "undefined" ? window.scrollX : 0;
+    let lastScrollY = typeof window !== "undefined" ? window.scrollY : 0;
 
     function resize() {
       if (!canvas) return;
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      // Redraw after resize
       if (lastCellX !== -1) draw(lastCellX, lastCellY);
     }
 
@@ -31,29 +32,34 @@ export default function GridOverlay() {
       if (!canvas || !ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const drawX = RULER_W + cellX * CELL;
-      const drawY = RULER_H + cellY * CELL;
+      // position relative to document
+      const docDrawX = RULER_W + cellX * CELL;
+      const docDrawY = RULER_H + cellY * CELL;
 
-      // — Column ruler highlight —
-      ctx.fillStyle = "rgba(190, 41, 236, 0.18)";
-      ctx.fillRect(drawX, 0, CELL, RULER_H);
+      // position relative to viewport (since canvas is fixed)
+      const viewX = docDrawX - window.scrollX;
+      const viewY = docDrawY - window.scrollY;
 
-      // — Row ruler highlight —
+      // — Column ruler highlight (fixed to top of viewport) —
       ctx.fillStyle = "rgba(190, 41, 236, 0.18)";
-      ctx.fillRect(0, drawY, RULER_W, CELL);
+      ctx.fillRect(viewX, 0, CELL, RULER_H);
+
+      // — Row ruler highlight (fixed to left of viewport, but scrolls vertically) —
+      ctx.fillStyle = "rgba(190, 41, 236, 0.18)";
+      ctx.fillRect(0, viewY, RULER_W, CELL);
 
       // — Cell fill —
       ctx.fillStyle = "rgba(190, 41, 236, 0.06)";
-      ctx.fillRect(drawX, drawY, CELL, CELL);
+      ctx.fillRect(viewX, viewY, CELL, CELL);
 
       // — Cell border (sharp 1px) —
       ctx.strokeStyle = "rgba(190, 41, 236, 0.45)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(drawX + 0.5, drawY + 0.5, CELL - 1, CELL - 1);
+      ctx.strokeRect(viewX + 0.5, viewY + 0.5, CELL - 1, CELL - 1);
 
-      // — Corner dot (top-left of the cell) —
+      // — Corner dot —
       ctx.fillStyle = "rgba(190, 41, 236, 0.9)";
-      ctx.fillRect(drawX, drawY, 2, 2);
+      ctx.fillRect(viewX, viewY, 2, 2);
     }
 
     function clear() {
@@ -64,30 +70,41 @@ export default function GridOverlay() {
     }
 
     function onMouseMove(e: MouseEvent) {
-      // Ignore if cursor is inside either ruler so we don't highlight ruler cells
       if (e.clientX < RULER_W || e.clientY < RULER_H) {
         if (lastCellX !== -1) clear();
         return;
       }
 
-      const cellX = Math.floor((e.clientX - RULER_W) / CELL);
-      const cellY = Math.floor((e.clientY - RULER_H) / CELL);
+      const docX = e.clientX + window.scrollX - RULER_W;
+      const docY = e.clientY + window.scrollY - RULER_H;
 
-      if (cellX === lastCellX && cellY === lastCellY) return; // no change
+      const cellX = Math.floor(docX / CELL);
+      const cellY = Math.floor(docY / CELL);
+
+      if (cellX === lastCellX && cellY === lastCellY) return;
       lastCellX = cellX;
       lastCellY = cellY;
       draw(cellX, cellY);
+    }
+
+    function onScroll() {
+      // If we are currently hovering a cell, redrawing on scroll keeps the highlight pinned to the document
+      if (lastCellX !== -1) {
+        draw(lastCellX, lastCellY);
+      }
     }
 
     resize();
     window.addEventListener("resize", resize);
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseleave", clear);
+    window.addEventListener("scroll", onScroll);
 
     return () => {
       window.removeEventListener("resize", resize);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseleave", clear);
+      window.removeEventListener("scroll", onScroll);
     };
   }, []);
 

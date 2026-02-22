@@ -1,19 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import GridOverlay from "./components/GridOverlay";
+import Sidebar from "./components/sidebar/Sidebar";
+import TutorialDetails from "./components/tutorial/TutorialDetails";
 
-const CELL = 28; // grid cell size in px
-const RULER_H = 24; // top ruler height
-const RULER_W = 48; // left ruler width
+const CELL = 28;
+const RULER_H = 24;
+const RULER_W = 48;
 const NUM_ROWS = 90;
 
-const colLabels = Array.from({ length: 60 }, (_, i) => {
-  if (i < 26) return String.fromCharCode(65 + i);
-  return "A" + String.fromCharCode(65 + (i - 26));
-});
+const colLabels = Array.from({ length: 60 }, (_, i) =>
+  i < 26 ? String.fromCharCode(65 + i) : "A" + String.fromCharCode(65 + (i - 26))
+);
 
 const exampleRepos = [
   { name: "vercel/next.js", year: "2024", type: "Framework", stars: "120K" },
@@ -23,18 +23,122 @@ const exampleRepos = [
   { name: "torvalds/linux", year: "2024", type: "OS Kernel", stars: "178K" },
 ];
 
+function LoadingGrid() {
+  const codePattern = [
+    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0], // function x()
+    [0, 0, 1, 1, 1, 1, 1, 1, 0, 0], //   doSomething()
+    [0, 0, 1, 1, 1, 1, 0, 0, 0, 0], //   return y
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], // }
+  ];
+  const ROWS = codePattern.length;
+  const COLS = codePattern[0].length;
+  const cells = Array.from({ length: COLS * ROWS });
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${COLS}, ${CELL}px)`,
+        gridTemplateRows: `repeat(${ROWS}, ${CELL}px)`,
+        gap: 1,
+        backgroundColor: "rgba(255,255,255,0.05)",
+        border: "1px solid rgba(255,255,255,0.05)",
+        margin: "0 auto 24px auto",
+        width: "fit-content"
+      }}
+    >
+      {cells.map((_, i) => {
+        const x = i % COLS;
+        const y = Math.floor(i / COLS);
+        const isActive = codePattern[y][x] === 1;
+
+        // cascade delay left-to-right, top-to-bottom
+        const delay = (y * 0.2) + (x * 0.05);
+
+        return (
+          <div
+            key={i}
+            className={isActive ? "grid-loader-cell" : ""}
+            style={{
+              backgroundColor: "#050505",
+              position: "relative",
+              width: "100%",
+              height: "100%",
+              ...(isActive ? { "--delay": `${delay}s` } : {})
+            } as any}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Home() {
   const [repoUrl, setRepoUrl] = useState("");
-  const router = useRouter();
+  const [repoData, setRepoData] = useState<any>(null);
+  const [chapters, setChapters] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedChapter, setSelectedChapter] = useState<any>(null);
+  const [loadingChapter, setLoadingChapter] = useState(false);
 
-  function handleAnalyze() {
+  // Dynamic grid size to cover scrolling content
+  const [gridRows, setGridRows] = useState(200);
+  const [gridCols, setGridCols] = useState(colLabels.length);
+
+  // Phase 1: fetch repo metadata
+  async function handleAnalyze() {
     if (!repoUrl.trim()) return;
-    router.push(`/home?repo=${encodeURIComponent(repoUrl.trim())}`);
+    setLoading(true);
+    try {
+      const res = await fetch("/api/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoUrl: repoUrl.trim() }),
+      });
+      const json = await res.json();
+      setRepoData(json);
+
+      // Phase 2: auto-generate chapters immediately
+      const planRes = await fetch("/api/tutorial/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoData: json }),
+      });
+      if (planRes.ok) {
+        const planJson = await planRes.json();
+        setChapters(planJson.chapters ?? []);
+        if (planJson.chapters?.length > 0) setSelectedChapter(planJson.chapters[0]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Phase 3: fetch individual chapter content on demand
+  async function handleChapterSelect(chapter: any) {
+    if (chapter.content) { setSelectedChapter(chapter); return; }
+    setLoadingChapter(true);
+    setSelectedChapter(chapter);
+    try {
+      const res = await fetch("/api/tutorial/chapter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter, repoData }),
+      });
+      if (!res.ok) return;
+      const { content } = await res.json();
+      setChapters(prev => prev.map(c => c.id === chapter.id ? { ...c, content } : c));
+      setSelectedChapter({ ...chapter, content });
+    } finally {
+      setLoadingChapter(false);
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") handleAnalyze();
   }
+
+  const hasChapters = chapters.length > 0;
 
   return (
     <div
@@ -335,12 +439,13 @@ export default function Home() {
               />
               <button
                 onClick={handleAnalyze}
+                disabled={loading}
                 style={{
                   padding: "0 28px",
-                  background: "linear-gradient(90deg, #b000ff, #d542ff)",
-                  color: "#fff",
+                  background: loading ? "#111" : "linear-gradient(90deg, #b000ff, #d542ff)",
+                  color: loading ? "#555" : "#fff",
                   border: "none",
-                  cursor: "pointer",
+                  cursor: loading ? "not-allowed" : "pointer",
                   fontSize: 11,
                   fontWeight: 700,
                   letterSpacing: "0.15em",
@@ -348,25 +453,27 @@ export default function Home() {
                   fontFamily: "monospace",
                   transition: "box-shadow 0.2s, transform 0.1s",
                   borderLeft: "1px solid rgba(255,255,255,0.1)",
+                  minWidth: 120,
+                  whiteSpace: "nowrap",
                 }}
                 onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.boxShadow = "0 0 20px rgba(190,41,236,0.5)";
+                  if (!loading) (e.currentTarget as HTMLElement).style.boxShadow = "0 0 20px rgba(190,41,236,0.5)";
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLElement).style.boxShadow = "none";
                 }}
                 onMouseDown={(e) => {
-                  (e.currentTarget as HTMLElement).style.transform = "scale(0.97)";
+                  if (!loading) (e.currentTarget as HTMLElement).style.transform = "scale(0.97)";
                 }}
                 onMouseUp={(e) => {
                   (e.currentTarget as HTMLElement).style.transform = "scale(1)";
                 }}
               >
-                RUN →
+                {loading ? "RUNNING..." : "RUN →"}
               </button>
             </div>
             <div style={{ fontSize: 9, color: "#333", letterSpacing: "0.1em", padding: "6px 0", textTransform: "uppercase" }}>
-              ↵ ENTER TO EXECUTE &nbsp;·&nbsp; RESULTS APPEAR IN /home
+              ↵ ENTER TO EXECUTE · RESULTS APPEAR INLINE
             </div>
           </div>
 
@@ -529,6 +636,111 @@ export default function Home() {
 
         </div>
       </div>
+
+      {/* ── TUTORIAL VIEW (replaces landing once chapters load) ── */}
+      {hasChapters && (
+        <div
+          className="grid-page"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            minHeight: "100vh",
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: "#050505",
+            fontFamily: "monospace",
+            zIndex: 100,
+            backgroundImage: "linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)",
+            backgroundSize: `${CELL}px ${CELL}px`,
+          }}
+        >
+          <GridOverlay />
+
+          {/* TOP RULER */}
+          <div className="flex shrink-0 select-none sticky top-0" style={{ height: RULER_H, backgroundColor: "#080808", borderBottom: "1px solid #222", zIndex: 150 }}>
+            <div style={{ width: RULER_W, minWidth: RULER_W, borderRight: "1px solid #222", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M0 10 L10 0" stroke="#333" strokeWidth="1" /></svg>
+            </div>
+            <div className="flex overflow-hidden">
+              {colLabels.slice(0, gridCols).map((c, i) => (
+                <div key={i} style={{ width: CELL, minWidth: CELL, height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#444", borderRight: "1px solid #111", letterSpacing: "0.05em" }}>{c}</div>
+              ))}
+            </div>
+            <div className="ml-auto flex items-center gap-4 pr-4 shrink-0" style={{ fontSize: 10, color: "#555", letterSpacing: "0.12em" }}>
+              {repoData && <span style={{ color: "#00eaff" }}>{repoData.name || "REPO"}</span>}
+              {selectedChapter && <span style={{ color: "#444" }}>/ CH.{String(selectedChapter.id).padStart(2, "0")}</span>}
+              <button
+                onClick={() => { setChapters([]); setRepoData(null); setSelectedChapter(null); }}
+                style={{ fontSize: 9, color: "#555", letterSpacing: "0.15em", background: "none", border: "1px solid #222", padding: "3px 10px", cursor: "pointer", fontFamily: "monospace", textTransform: "uppercase" }}
+                onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = "#fff")}
+                onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = "#555")}
+              >← BACK</button>
+            </div>
+          </div>
+
+          {/* BODY */}
+          <div className="flex flex-1 relative" ref={(el) => {
+            if (!el) return;
+            const updateSize = () => {
+              const rect = el.getBoundingClientRect();
+              const neededRows = Math.max(200, Math.ceil(rect.height / CELL) + 20); // +20 buffer
+              const neededCols = Math.max(colLabels.length, Math.ceil(rect.width / CELL));
+
+              if (neededRows > gridRows) setGridRows(neededRows);
+              if (neededCols > gridCols) setGridCols(neededCols);
+            };
+            const obs = new ResizeObserver(updateSize);
+            obs.observe(el);
+            // also observe body in case scrolling stretches the page
+            obs.observe(document.body);
+            updateSize();
+            return () => obs.disconnect();
+          }}>
+            {/* LEFT ROW RULER */}
+            <div className="shrink-0 select-none" style={{ width: RULER_W, backgroundColor: "#080808", borderRight: "1px solid #222" }}>
+              <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: RULER_W, overflow: "hidden" }}>
+                {Array.from({ length: gridRows }, (_, i) => (
+                  <div key={i} style={{ height: CELL, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8, fontSize: 9, color: selectedChapter?.id === chapters[i]?.id ? "#be29ec" : "#333", borderBottom: "1px solid #0f0f0f" }}>
+                    {i + 1}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* SIDEBAR */}
+            <div className="sticky" style={{ top: RULER_H, height: `calc(100vh - ${RULER_H}px - 22px)`, zIndex: 140 }}>
+              <Sidebar chapters={chapters} onSelectChapter={handleChapterSelect} selectedChapterId={selectedChapter?.id} />
+            </div>
+
+            {/* MAIN CONTENT */}
+            <div className="flex-1" style={{ position: "relative", paddingBottom: 64 }}>
+              <TutorialDetails chapter={selectedChapter} isLoading={loadingChapter} />
+            </div>
+          </div>
+
+          {/* STATUS BAR */}
+          <div className="shrink-0 flex items-center justify-between px-4 fixed bottom-0 left-0 right-0" style={{ height: 22, backgroundColor: "#080808", borderTop: "1px solid #222", fontSize: 9, color: "#444", letterSpacing: "0.12em", textTransform: "uppercase", zIndex: 160 }}>
+            <span>KODIN v1.0</span>
+            <span style={{ display: "flex", gap: 20 }}>
+              <span>CHAPTERS: {chapters.length}</span>
+              {selectedChapter && <span style={{ color: "#be29ec" }}>CH.{String(selectedChapter.id).padStart(2, "0")} ACTIVE</span>}
+            </span>
+            <span>READY</span>
+          </div>
+        </div>
+      )}
+
+      {/* LOADING OVERLAY */}
+      {loading && (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300 }}>
+          <div style={{ border: "1px solid #2a2a2a", backgroundColor: "#050505", padding: "32px 48px", textAlign: "center" }}>
+            <LoadingGrid />
+            <div style={{ fontSize: 10, color: "#555", letterSpacing: "0.2em", textTransform: "uppercase" }}>ANALYZING REPOSITORY...</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
