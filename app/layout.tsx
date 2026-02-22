@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { Outfit } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const outfit = Outfit({
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-outfit",
+  variable: "--font-sans",
 });
 
 export const metadata: Metadata = {
-  title: "Kodin",
+  title: "Neon Docs Adapt",
   description: "AI Github Repository Tutoring Generator",
 };
 
@@ -20,7 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${outfit.className} antialiased`}
+        className={`${inter.className} antialiased`}
       >
         {children}
       </body>
