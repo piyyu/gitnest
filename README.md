@@ -1,6 +1,6 @@
-# Kodin 🚀
+# GitNest 🚀
 
-**Kodin** is an advanced AI-powered tutoring assistant designed to help developers understand any GitHub repository. By analyzing the codebase, Kodin generates a structured, step-by-step tutorial plan and provides detailed, deep-dive chapters on-demand, explaining the architecture, key concepts, and implementation details.
+**GitNest** is an advanced AI-powered tutoring assistant designed to help developers understand any GitHub repository. By analyzing the codebase, GitNest generates a structured, step-by-step tutorial plan and provides detailed, deep-dive chapters on-demand, explaining the architecture, key concepts, and implementation details.
 
 ## ✨ Features
 
@@ -30,8 +30,8 @@
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/piyyu/kodin.git
-    cd kodin
+    git clone https://github.com/piyyu/gitnest.git
+    cd gitnest
     ```
 
 2.  **Install dependencies:**

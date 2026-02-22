@@ -240,7 +240,7 @@ export default function HomeDashboard() {
         className="shrink-0 flex items-center justify-between px-4 select-none"
         style={{ height: 22, backgroundColor: "#080808", borderTop: "1px solid #222", fontSize: 9, color: "#444", letterSpacing: "0.12em", textTransform: "uppercase" }}
       >
-        <span>KODIN ANALYZE v1.0</span>
+        <span>GITNEST ANALYZE v1.0</span>
         <span style={{ display: "flex", gap: 20 }}>
           {chapters.length > 0 && <span>CHAPTERS: {chapters.length}</span>}
           {selectedChapter && <span style={{ color: "#be29ec" }}>CH.{String(selectedChapter.id).padStart(2, "0")} ACTIVE</span>}

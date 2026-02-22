@@ -322,7 +322,7 @@ export default function Home() {
             {/* card body */}
             <div style={{ padding: "20px 16px" }}>
               <div style={{ fontSize: 10, color: "#555", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 6 }}>
-                KODIN
+                GITNEST
               </div>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 16, letterSpacing: "-0.02em", lineHeight: 1.3 }}>
                 We explain any repository<br />with machine precision.
@@ -490,7 +490,7 @@ export default function Home() {
             {/* table label */}
             <div style={{ marginBottom: 0 }}>
               <span style={{ fontSize: 9, color: "#555", textTransform: "uppercase", letterSpacing: "0.2em" }}>
-                EXAMPLE REPOSITORIES // KODIN CAN EXPLAIN THESE
+                EXAMPLE REPOSITORIES // GITNEST CAN EXPLAIN THESE
               </span>
             </div>
 
@@ -627,10 +627,10 @@ export default function Home() {
                 WebkitTextFillColor: "transparent",
               }}
             >
-              KODIN
+              GITNEST
             </span>
             <span style={{ fontSize: 10, color: "#333", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-              © 2025 KODIN SYS
+              © 2025 GITNEST SYS
             </span>
           </div>
 
@@ -722,7 +722,7 @@ export default function Home() {
 
           {/* STATUS BAR */}
           <div className="shrink-0 flex items-center justify-between px-4 fixed bottom-0 left-0 right-0" style={{ height: 22, backgroundColor: "#080808", borderTop: "1px solid #222", fontSize: 9, color: "#444", letterSpacing: "0.12em", textTransform: "uppercase", zIndex: 160 }}>
-            <span>KODIN v1.0</span>
+            <span>GITNEST v1.0</span>
             <span style={{ display: "flex", gap: 20 }}>
               <span>CHAPTERS: {chapters.length}</span>
               {selectedChapter && <span style={{ color: "#be29ec" }}>CH.{String(selectedChapter.id).padStart(2, "0")} ACTIVE</span>}

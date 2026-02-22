@@ -113,7 +113,7 @@ export default function SignUp() {
 
       {/* STATUS BAR */}
       <div className="shrink-0 flex items-center justify-between px-4" style={{ height: 22, backgroundColor: "#080808", borderTop: "1px solid #222", fontSize: 9, color: "#444", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-        <span>KODIN AUTH</span>
+        <span>GITNEST AUTH</span>
         <span>NEW RECORD</span>
       </div>
     </div>

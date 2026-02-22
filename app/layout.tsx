@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Neon Docs Adapt",
+  title: "GitNest",
   description: "AI Github Repository Tutoring Generator",
 };
 
