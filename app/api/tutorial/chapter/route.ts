@@ -1,8 +1,4 @@
-import Groq from "groq-sdk";
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { chatCompletion } from "@/lib/groq";
 
 export async function POST(req: Request) {
   try {
@@ -87,15 +83,13 @@ IMPORTANT Rules for Output:
 3. Use at most ## (H2) for top-level sections since the page title is H1.
 `;
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      temperature: 0.3,
-      max_tokens: 2000,
-      messages: [
+    const { completion } = await chatCompletion(
+      [
         { role: "system", content: "You are a helpful coding tutor." },
         { role: "user", content: prompt },
       ],
-    });
+      { temperature: 0.3, max_tokens: 2000, task: "chapter" }
+    );
 
     const content = completion.choices[0]?.message?.content || "";
     console.log(`Generated chapter ${chapter.id} length: ${content.length}`);

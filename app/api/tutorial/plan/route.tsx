@@ -1,8 +1,4 @@
-import Groq from "groq-sdk";
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY!,
-});
+import { chatCompletion } from "@/lib/groq";
 
 function extractJSONArray(text: string) {
   const match = text.match(/\[[\s\S]*\]/);
@@ -62,18 +58,16 @@ ${JSON.stringify(repoMap, null, 2)}
 `;
 
     }
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      temperature: 0.2,
-      max_tokens: 1000,
-      messages: [
+    const { completion } = await chatCompletion(
+      [
         { role: "system", content: "Output JSON only." },
         {
           role: "user",
           content: buildRepoChapterPrompt(repoMap),
         },
       ],
-    });
+      { temperature: 0.2, max_tokens: 1000, task: "plan" }
+    );
 
     const raw = completion.choices[0]?.message?.content ?? "";
     const chapters = extractJSONArray(raw);
