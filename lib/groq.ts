@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 
-// Plan = cheap/fast JSON outline; chapter = bigger model for long-form tutorials.
+// Plan = cheap/fast JSON outline; chapter = speed-first (20b streams ~2-3x
+// faster than 120b; quality is close enough for tutorials, 120b is fallback).
 const PLAN_MODELS = [
   "openai/gpt-oss-20b",
   "openai/gpt-oss-120b",
@@ -9,8 +10,8 @@ const PLAN_MODELS = [
 ];
 
 const CHAPTER_MODELS = [
-  "openai/gpt-oss-120b",
   "openai/gpt-oss-20b",
+  "openai/gpt-oss-120b",
   "meta-llama/llama-4-maverick-17b-128e-instruct",
   "moonshotai/kimi-k2-instruct-0905",
 ];
@@ -65,6 +66,39 @@ function isModelNotFoundError(error: any): boolean {
   );
 }
 
+function isRetryableError(error: any): boolean {
+  const status = error?.status ?? error?.error?.status;
+  const code = String(error?.error?.code || error?.code || "");
+  const msg = String(error?.error?.message || error?.message || "");
+  return (
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    code === "rate_limit_exceeded" ||
+    code === "rate_limit_reached" ||
+    code === "tpm_limit_exceeded" ||
+    /rate limit|too many requests|tpm|temporarily|overloaded|try again/i.test(msg)
+  );
+}
+
+function getRetryDelayMs(error: any, attempt: number): number {
+  const headerVal =
+    error?.headers?.["retry-after"] ??
+    error?.error?.headers?.["retry-after"] ??
+    error?.headers?.get?.("retry-after");
+  const parsed = Number(headerVal);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(parsed * 1000, 20_000);
+  }
+  // Exponential backoff with jitter: 1s, 2s, 4s, 8s...
+  return Math.min(1000 * 2 ** attempt + Math.random() * 500, 15_000);
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -84,24 +118,35 @@ export async function chatCompletion(
   let lastError: any = null;
 
   for (const model of models) {
-    try {
-      const completion = await groq.chat.completions.create({
-        model,
-        temperature: opts?.temperature ?? 0.5,
-        ...(opts?.max_tokens ? { max_tokens: opts.max_tokens } : {}),
-        messages,
-      });
-      return { completion, model };
-    } catch (error: any) {
-      lastError = error;
-      if (isModelNotFoundError(error)) {
-        console.error(
-          `Groq model "${model}" unavailable, trying fallback...`,
-          error?.error?.message || error?.message
-        );
-        continue;
+    // Retry rate limits per model before falling through to the next one.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const completion = await groq.chat.completions.create({
+          model,
+          temperature: opts?.temperature ?? 0.5,
+          ...(opts?.max_tokens ? { max_tokens: opts.max_tokens } : {}),
+          messages,
+        });
+        return { completion, model };
+      } catch (error: any) {
+        lastError = error;
+        if (isModelNotFoundError(error)) {
+          console.error(
+            `Groq model "${model}" unavailable, trying fallback...`,
+            error?.error?.message || error?.message
+          );
+          break; // next model
+        }
+        if (isRetryableError(error) && attempt < 3) {
+          const delay = getRetryDelayMs(error, attempt);
+          console.warn(
+            `Groq model "${model}" rate-limited, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1})`
+          );
+          await sleep(delay);
+          continue;
+        }
+        throw error;
       }
-      throw error;
     }
   }
 
@@ -120,34 +165,44 @@ export async function streamChatCompletion(
   let lastError: any = null;
 
   for (const model of models) {
-    try {
-      const stream = await groq.chat.completions.create({
-        model,
-        temperature: opts?.temperature ?? 0.5,
-        ...(opts?.max_tokens ? { max_tokens: opts.max_tokens } : {}),
-        messages,
-        stream: true,
-      });
-      let fullText = "";
-      for await (const chunk of stream) {
-        if (opts?.signal?.aborted) break;
-        const token = (chunk as any)?.choices?.[0]?.delta?.content || "";
-        if (token) {
-          fullText += token;
-          opts?.onToken?.(token);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const stream = await groq.chat.completions.create({
+          model,
+          temperature: opts?.temperature ?? 0.5,
+          ...(opts?.max_tokens ? { max_tokens: opts.max_tokens } : {}),
+          messages,
+          stream: true,
+        });
+        let fullText = "";
+        for await (const chunk of stream) {
+          if (opts?.signal?.aborted) break;
+          const token = (chunk as any)?.choices?.[0]?.delta?.content || "";
+          if (token) {
+            fullText += token;
+            opts?.onToken?.(token);
+          }
         }
+        return { content: fullText, model };
+      } catch (error: any) {
+        lastError = error;
+        if (isModelNotFoundError(error)) {
+          console.error(
+            `Groq model "${model}" unavailable (stream), trying fallback...`,
+            error?.error?.message || error?.message
+          );
+          break; // next model
+        }
+        if (isRetryableError(error) && attempt < 3) {
+          const delay = getRetryDelayMs(error, attempt);
+          console.warn(
+            `Groq model "${model}" rate-limited (stream), retrying in ${Math.round(delay)}ms (attempt ${attempt + 1})`
+          );
+          await sleep(delay);
+          continue;
+        }
+        throw error;
       }
-      return { content: fullText, model };
-    } catch (error: any) {
-      lastError = error;
-      if (isModelNotFoundError(error)) {
-        console.error(
-          `Groq model "${model}" unavailable (stream), trying fallback...`,
-          error?.error?.message || error?.message
-        );
-        continue;
-      }
-      throw error;
     }
   }
 

@@ -24,8 +24,8 @@ export async function POST(req: Request) {
     const repoMap = {
       projectType: repoData.projectType,
       fileCount: allCodePaths.length,
-      files: allCodePaths.slice(0, 300),
-      configs: (repoData.files.configs || []).map((f: any) => f.path).slice(0, 20),
+      files: allCodePaths.slice(0, 200),
+      configs: (repoData.files.configs || []).map((f: any) => f.path).slice(0, 15),
     };
 
     const buildRepoChapterPrompt = (repoMap: any) => {

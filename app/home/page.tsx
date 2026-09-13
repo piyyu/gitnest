@@ -22,10 +22,40 @@ export default function HomeDashboard() {
   const [selectedChapter, setSelectedChapter] = useState<any>(null);
   const [loadingChapter, setLoadingChapter] = useState(false);
   const [generatingPlan, setGeneratingPlan] = useState(false);
+  const [chapterError, setChapterError] = useState<string | null>(null);
   const router = useRouter();
   // Tracks the latest requested chapter so stale streams can't overwrite it.
   const activeChapterRef = useRef<string | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
+  // Chapters currently generating in the background — avoids duplicate work
+  // when parallel prefetch overlaps with user navigation.
+  const inflightRef = useRef<Set<string>>(new Set());
+
+  // Full repoData holds up to 120 files × 100KB — sending it on every chapter
+  // request means megabytes of upload per click. The server only needs path +
+  // head of content, so trim once per request (~150-250KB instead of MBs).
+  function getSlimRepo(data: any) {
+    if (!data?.files) return data;
+    return {
+      projectType: data.projectType,
+      files: {
+        docs: (data.files.docs || []).slice(0, 5).map((f: any) => ({
+          path: f.path,
+          content: String(f.content || "").slice(0, 2000),
+        })),
+        configs: (data.files.configs || []).slice(0, 10).map((f: any) => ({
+          path: f.path,
+          content: String(f.path || "").endsWith("package.json")
+            ? String(f.content || "").slice(0, 2000)
+            : "",
+        })),
+        code: (data.files.code || []).slice(0, 80).map((f: any) => ({
+          path: f.path,
+          content: String(f.content || "").slice(0, 2500),
+        })),
+      },
+    };
+  }
 
   async function fetchGithub() {
     if (!repoUrl.trim()) return;
@@ -57,6 +87,9 @@ export default function HomeDashboard() {
         // content streaming in instead of waiting for another click.
         // Pass data explicitly to avoid stale state.
         handleChapterSelect(json.chapters[0], json.chapters, repoData);
+        // Warm the next chapters in parallel right away (don't wait for ch.1
+        // to finish — that serializes all generation into minutes).
+        prefetchAhead(0, json.chapters, repoData, 2);
       }
     } finally {
       setGeneratingPlan(false);
@@ -72,6 +105,7 @@ export default function HomeDashboard() {
     opts?: { prefetch?: boolean }
   ) {
     const prefetch = opts?.prefetch ?? false;
+    const slimRepo = getSlimRepo(data);
     try {
       const res = await fetch("/api/tutorial/chapter?stream=1", {
         method: "POST",
@@ -79,7 +113,7 @@ export default function HomeDashboard() {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify({ chapter, repoData: data }),
+        body: JSON.stringify({ chapter, repoData: slimRepo }),
         signal: prefetch ? undefined : streamAbortRef.current?.signal,
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -130,7 +164,7 @@ export default function HomeDashboard() {
       const res = await fetch("/api/tutorial/chapter", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapter, repoData: data }),
+        body: JSON.stringify({ chapter, repoData: slimRepo }),
       });
       if (!res.ok) return null;
       const { content } = await res.json();
@@ -144,14 +178,28 @@ export default function HomeDashboard() {
     }
   }
 
+  // Warm the next `count` uncached chapters in parallel, immediately.
+  // Old code prefetched only the single next chapter after a delay, which
+  // serialized all generation. Dedupe via inflight set + content check.
+  function prefetchAhead(fromIndex: number, list: any[], data: any, count = 3) {
+    let started = 0;
+    for (let i = fromIndex + 1; i < list.length && started < count; i++) {
+      const c = list[i];
+      if (!c || c.content || inflightRef.current.has(c.id)) continue;
+      inflightRef.current.add(c.id);
+      started++;
+      streamChapter(c, list, data, { prefetch: true }).finally(() => {
+        inflightRef.current.delete(c.id);
+      });
+    }
+  }
+
   function prefetchChapter(chapter: any, allChapters: any[], data: any) {
-    if (!chapter || chapter.content) return;
-    // Fire-and-forget: warm the cache for the next chapter while the user reads.
-    // requestIdleCallback keeps it off the critical path when available.
-    const run = () => streamChapter(chapter, allChapters, data, { prefetch: true });
-    const ric = (window as any).requestIdleCallback;
-    if (typeof ric === "function") ric(run, { timeout: 2000 });
-    else setTimeout(run, 1500);
+    if (!chapter || chapter.content || inflightRef.current.has(chapter.id)) return;
+    inflightRef.current.add(chapter.id);
+    streamChapter(chapter, allChapters, data, { prefetch: true }).finally(() => {
+      inflightRef.current.delete(chapter.id);
+    });
   }
 
   async function handleChapterSelect(chapter: any, allChapters?: any[], data?: any) {
@@ -164,8 +212,9 @@ export default function HomeDashboard() {
       activeChapterRef.current = chapter.id;
       setSelectedChapter(cached);
       setLoadingChapter(false);
+      setChapterError(null);
       const idx = list.findIndex((c: any) => c.id === chapter.id);
-      prefetchChapter(list[idx + 1], list, repo);
+      prefetchAhead(idx, list, repo, 3);
       return;
     }
     // Cancel any in-flight stream before starting a new one.
@@ -174,20 +223,41 @@ export default function HomeDashboard() {
     streamAbortRef.current = controller;
     activeChapterRef.current = chapter.id;
     setLoadingChapter(true);
+    setChapterError(null);
     // Show the shell immediately with empty content so tokens stream in.
     setSelectedChapter({ ...chapter, content: "" });
+    // Mark foreground generation as in-flight so prefetch won't duplicate it.
+    inflightRef.current.add(chapter.id);
     try {
-      await streamChapter(chapter, list, repo);
+      const content = await streamChapter(chapter, list, repo);
+      // Empty/failed generation used to leave a blank shell with a vague hint.
+      // Surface it as an error with a retry instead.
+      if (!content && activeChapterRef.current === chapter.id) {
+        setChapterError("Couldn't generate this chapter (rate limit or network hiccup). Hit retry.");
+      }
     } finally {
+      inflightRef.current.delete(chapter.id);
       if (activeChapterRef.current === chapter.id) setLoadingChapter(false);
     }
-    // Prefetch the next chapter in reading order.
+    // Prefetch the next chapters in reading order.
     const idx = list.findIndex((c: any) => c.id === chapter.id);
-    const latest = list; // prefetch uses the same list snapshot
-    prefetchChapter(latest[idx + 1], latest, repo);
+    prefetchAhead(idx, list, repo, 3);
+  }
+
+  function retrySelectedChapter() {
+    if (selectedChapter) handleChapterSelect(selectedChapter);
   }
 
   const hasChapters = chapters.length > 0;
+  // The selected chapter is a detached copy — if a background prefetch
+  // finishes for the same id, prefer the cached copy so the view always
+  // reflects completed work (never stuck on an empty shell).
+  const cachedSelected = selectedChapter
+    ? chapters.find((c: any) => c.id === selectedChapter.id)
+    : null;
+  const visibleChapter =
+    cachedSelected?.content ? cachedSelected : selectedChapter;
+  const repoName = repoData?.repo || repoData?.name || "UNNAMED";
 
   return (
     <div
@@ -218,7 +288,7 @@ export default function HomeDashboard() {
           {repoData ? (
             <>
               <span style={{ color: "#444" }}>REPO /</span>
-              <span style={{ color: "#00eaff" }}>{repoData.name || "UNNAMED"}</span>
+              <span style={{ color: "#00eaff" }}>{repoName}</span>
               {selectedChapter && (
                 <>
                   <span style={{ color: "#333" }}>/ CH.{String(selectedChapter.id).padStart(2, "0")}</span>
@@ -269,7 +339,12 @@ export default function HomeDashboard() {
           }}
         >
           {selectedChapter ? (
-            <TutorialDetails chapter={selectedChapter} isLoading={loadingChapter} />
+            <TutorialDetails
+              chapter={visibleChapter}
+              isLoading={loadingChapter}
+              error={chapterError}
+              onRetry={retrySelectedChapter}
+            />
           ) : (
             /* INPUT AREA */
             <div className="flex flex-col items-center justify-center min-h-full p-16 gap-0">
@@ -339,7 +414,7 @@ export default function HomeDashboard() {
                   <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid #1e1e1e" }}>
                     <span style={{ width: 6, height: 6, backgroundColor: "#39ff14", boxShadow: "0 0 6px #39ff14", display: "inline-block" }} />
                     <span style={{ fontSize: 9, color: "#39ff14", letterSpacing: "0.15em", textTransform: "uppercase" }}>REPO FOUND</span>
-                    <span style={{ fontSize: 12, color: "#aaa", marginLeft: "auto", fontFamily: "monospace" }}>{repoData.name}</span>
+                    <span style={{ fontSize: 12, color: "#aaa", marginLeft: "auto", fontFamily: "monospace" }}>{repoName}</span>
                   </div>
                   <div style={{ padding: "16px" }}>
                     <button

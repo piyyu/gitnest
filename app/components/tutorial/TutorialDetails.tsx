@@ -6,23 +6,29 @@ import CodeBlock from "./CodeBlock";
 interface TutorialDetailsProps {
   chapter: any;
   isLoading: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }
 
-export default function TutorialDetails({ chapter, isLoading }: TutorialDetailsProps) {
+export default function TutorialDetails({ chapter, isLoading, error, onRetry }: TutorialDetailsProps) {
   const CELL = 28;
 
-  // Full skeleton only when there's nothing to show yet.
-  // While streaming, chapter.content grows token-by-token and we render
-  // it progressively below instead of blocking on a spinner.
+  // Loading with nothing streamed yet: show the REAL chapter title/summary
+  // plus a skeleton body, so the first view never looks blank or broken.
   if (isLoading && !chapter?.content) {
     return (
       <div style={{ padding: "48px 48px", fontFamily: "monospace" }}>
-        {/* skeleton header */}
-        <div style={{ marginBottom: 32 }}>
-          <div style={{ height: 9, backgroundColor: "#111", width: 180, marginBottom: 12 }} />
-          <div style={{ height: 28, backgroundColor: "#0d0d0d", width: "60%", marginBottom: 8 }} />
-          <div style={{ height: 28, backgroundColor: "#0a0a0a", width: "40%" }} />
+        <div style={{ fontSize: 9, color: "#555", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 16 }}>
+          CHAPTER · {String(chapter?.id ?? "").padStart(2, "0")}
         </div>
+        <h2 style={{ fontSize: 24, fontWeight: 900, color: "#fff", textTransform: "uppercase", letterSpacing: "-0.03em", marginBottom: 12 }}>
+          {chapter?.title || "Loading chapter..."}
+        </h2>
+        {chapter?.summary && (
+          <p style={{ fontSize: 13, color: "#555", lineHeight: 1.8, marginBottom: 32 }}>
+            {chapter.summary}
+          </p>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} style={{ height: 13, backgroundColor: "#0a0a0a", width: `${70 + Math.random() * 25}%` }} />
@@ -45,8 +51,24 @@ export default function TutorialDetails({ chapter, isLoading }: TutorialDetailsP
           {chapter.title}
         </h2>
         <p style={{ fontSize: 13, color: "#555", lineHeight: 1.8 }}>
-          {chapter.description || "Click the chapter to generate the full tutorial content."}
+          {chapter.summary || chapter.description || "Click the chapter to generate the full tutorial content."}
         </p>
+        {error && (
+          <div style={{ marginTop: 24, border: "1px solid #3a1a1a", backgroundColor: "#120707", padding: "14px 16px" }}>
+            <div style={{ fontSize: 10, color: "#ff6b6b", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>
+              ■ GENERATION FAILED
+            </div>
+            <div style={{ fontSize: 12, color: "#a08080", lineHeight: 1.7, marginBottom: 14 }}>{error}</div>
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                style={{ padding: "10px 20px", background: "linear-gradient(90deg, #b000ff, #d542ff)", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: "monospace", cursor: "pointer" }}
+              >
+                RETRY →
+              </button>
+            )}
+          </div>
+        )}
       </div>
     );
   }

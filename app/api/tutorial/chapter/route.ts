@@ -55,14 +55,16 @@ function buildRepoContext(chapter: any, repoData: any) {
     ...(repoData.files.code || []).map((f: any) => f.path),
   ];
 
-  const relevant = selectRelevantFiles(chapter, repoData.files.code || [], 6);
+  // 5 files × 1200 chars ≈ 6k chars input (was 6 × 1800 ≈ 11k).
+  // Smaller input = faster time-to-first-token on every chapter.
+  const relevant = selectRelevantFiles(chapter, repoData.files.code || [], 5);
 
   return {
     projectType: repoData.projectType,
-    fileTree: allPaths.slice(0, 150),
+    fileTree: allPaths.slice(0, 100),
     files: relevant.map((f: any) => ({
       path: f.path,
-      content: f.content ? String(f.content).slice(0, 1800) : "// No content",
+      content: f.content ? String(f.content).slice(0, 1200) : "// No content",
     })),
   };
 }
@@ -79,7 +81,7 @@ STRICT RULES:
 5. If the chapter is about "Auth", only explain the Auth files in the context.
 6. If the chapter is "Project Structure" or an overview, use the 'fileTree' to describe the architecture.
 7. Use Markdown. Use code blocks with the language specified (e.g. \`\`\`tsx).
-8. Be concise but complete. Aim for ~700-1000 words.
+8. Be concise but complete. Aim for ~500-700 words. Keep code blocks short (max 3 blocks, under 25 lines each).
 
 STRUCTURE REQUIREMENT:
 You MUST follow this exact structure for the chapter:
@@ -133,23 +135,32 @@ export async function POST(req: Request) {
       { role: "system" as const, content: "You are a helpful coding tutor." },
       { role: "user" as const, content: buildPrompt(chapter, repoContext) },
     ];
-    const genOpts = { temperature: 0.3, max_tokens: 2000, task: "chapter" as const };
+    // 1400 tokens ≈ 1000 words cap — shorter tail, much faster finish.
+    const genOpts = { temperature: 0.3, max_tokens: 1400, task: "chapter" as const };
+    const t0 = Date.now();
 
     if (wantsStream) {
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
         async start(controller) {
           try {
+            let firstTokenAt = 0;
             const { content, model } = await streamChatCompletion(messages, {
               ...genOpts,
               onToken: (token) => {
+                if (!firstTokenAt) {
+                  firstTokenAt = Date.now();
+                  console.log(
+                    `Chapter ${chapter.id} TTFT: ${firstTokenAt - t0}ms (model: pending)`
+                  );
+                }
                 controller.enqueue(
                   encoder.encode(`data: ${JSON.stringify({ token })}\n\n`)
                 );
               },
             });
             console.log(
-              `Streamed chapter ${chapter.id} with model: ${model} length: ${content.length}`
+              `Streamed chapter ${chapter.id} with model: ${model} length: ${content.length} total: ${Date.now() - t0}ms`
             );
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ done: true, content })}\n\n`)
@@ -177,7 +188,7 @@ export async function POST(req: Request) {
     const { completion, model } = await chatCompletion(messages, genOpts);
 
     const content = completion.choices[0]?.message?.content || "";
-    console.log(`Generated chapter ${chapter.id} with model: ${model} length: ${content.length}`);
+    console.log(`Generated chapter ${chapter.id} with model: ${model} length: ${content.length} total: ${Date.now() - t0}ms`);
 
     return Response.json({ content });
   } catch (err: any) {
