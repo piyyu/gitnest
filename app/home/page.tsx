@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import GridOverlay from "../components/GridOverlay";
 import Sidebar from "../components/sidebar/Sidebar";
@@ -21,7 +21,11 @@ export default function HomeDashboard() {
   const [loading, setLoading] = useState(false);
   const [selectedChapter, setSelectedChapter] = useState<any>(null);
   const [loadingChapter, setLoadingChapter] = useState(false);
+  const [generatingPlan, setGeneratingPlan] = useState(false);
   const router = useRouter();
+  // Tracks the latest requested chapter so stale streams can't overwrite it.
+  const activeChapterRef = useRef<string | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
 
   async function fetchGithub() {
     if (!repoUrl.trim()) return;
@@ -38,34 +42,149 @@ export default function HomeDashboard() {
 
   async function createChapters() {
     if (!repoData) return;
-    const res = await fetch("/api/tutorial/plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repoData }),
-    });
-    if (!res.ok) return;
-    const json = await res.json();
-    setChapters(json.chapters);
-    if (json.chapters?.length > 0) setSelectedChapter(json.chapters[0]);
+    setGeneratingPlan(true);
+    try {
+      const res = await fetch("/api/tutorial/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repoData }),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      setChapters(json.chapters);
+      if (json.chapters?.length > 0) {
+        // Auto-start the first chapter immediately so the user sees
+        // content streaming in instead of waiting for another click.
+        // Pass data explicitly to avoid stale state.
+        handleChapterSelect(json.chapters[0], json.chapters, repoData);
+      }
+    } finally {
+      setGeneratingPlan(false);
+    }
   }
 
-  async function handleChapterSelect(chapter: any) {
-    if (chapter.content) { setSelectedChapter(chapter); return; }
-    setLoadingChapter(true);
-    setSelectedChapter(chapter);
+  // Streams a chapter token-by-token and caches the result.
+  // `prefetch=true` runs quietly in the background without touching selection.
+  async function streamChapter(
+    chapter: any,
+    allChapters: any[],
+    data: any,
+    opts?: { prefetch?: boolean }
+  ) {
+    const prefetch = opts?.prefetch ?? false;
     try {
+      const res = await fetch("/api/tutorial/chapter?stream=1", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ chapter, repoData: data }),
+        signal: prefetch ? undefined : streamAbortRef.current?.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let content = "";
+
+      const flushSelection = (text: string) => {
+        if (prefetch) return;
+        if (activeChapterRef.current !== chapter.id) return;
+        setSelectedChapter({ ...chapter, content: text });
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const evt of events) {
+          const line = evt.trim();
+          if (!line.startsWith("data:")) continue;
+          const payload = JSON.parse(line.slice(5).trim());
+          if (payload.token) {
+            content += payload.token;
+            flushSelection(content);
+          } else if (payload.done) {
+            content = payload.content || content;
+            flushSelection(content);
+          } else if (payload.error) {
+            throw new Error(payload.error);
+          }
+        }
+      }
+      // Cache completed content for instant revisits + prefetch hits.
+      setChapters((prev) =>
+        prev.map((c) => (c.id === chapter.id ? { ...c, content } : c))
+      );
+      if (!prefetch && activeChapterRef.current === chapter.id) {
+        setSelectedChapter({ ...chapter, content });
+      }
+      return content;
+    } catch (err) {
+      // Fallback to the non-streaming endpoint if SSE fails.
+      if (prefetch) return null;
+      if (activeChapterRef.current !== chapter.id) return null;
       const res = await fetch("/api/tutorial/chapter", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapter, repoData }),
+        body: JSON.stringify({ chapter, repoData: data }),
       });
-      if (!res.ok) { setLoadingChapter(false); return; }
+      if (!res.ok) return null;
       const { content } = await res.json();
-      setChapters(prev => prev.map(c => c.id === chapter.id ? { ...c, content } : c));
-      setSelectedChapter({ ...chapter, content });
-    } finally {
-      setLoadingChapter(false);
+      setChapters((prev) =>
+        prev.map((c) => (c.id === chapter.id ? { ...c, content } : c))
+      );
+      if (activeChapterRef.current === chapter.id) {
+        setSelectedChapter({ ...chapter, content });
+      }
+      return content;
     }
+  }
+
+  function prefetchChapter(chapter: any, allChapters: any[], data: any) {
+    if (!chapter || chapter.content) return;
+    // Fire-and-forget: warm the cache for the next chapter while the user reads.
+    // requestIdleCallback keeps it off the critical path when available.
+    const run = () => streamChapter(chapter, allChapters, data, { prefetch: true });
+    const ric = (window as any).requestIdleCallback;
+    if (typeof ric === "function") ric(run, { timeout: 2000 });
+    else setTimeout(run, 1500);
+  }
+
+  async function handleChapterSelect(chapter: any, allChapters?: any[], data?: any) {
+    const list = allChapters ?? chapters;
+    const repo = data ?? repoData;
+    // Instant cache hit (including prefetched chapters).
+    const cached = list.find((c: any) => c.id === chapter.id);
+    if (cached?.content) {
+      streamAbortRef.current?.abort();
+      activeChapterRef.current = chapter.id;
+      setSelectedChapter(cached);
+      setLoadingChapter(false);
+      const idx = list.findIndex((c: any) => c.id === chapter.id);
+      prefetchChapter(list[idx + 1], list, repo);
+      return;
+    }
+    // Cancel any in-flight stream before starting a new one.
+    streamAbortRef.current?.abort();
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    activeChapterRef.current = chapter.id;
+    setLoadingChapter(true);
+    // Show the shell immediately with empty content so tokens stream in.
+    setSelectedChapter({ ...chapter, content: "" });
+    try {
+      await streamChapter(chapter, list, repo);
+    } finally {
+      if (activeChapterRef.current === chapter.id) setLoadingChapter(false);
+    }
+    // Prefetch the next chapter in reading order.
+    const idx = list.findIndex((c: any) => c.id === chapter.id);
+    const latest = list; // prefetch uses the same list snapshot
+    prefetchChapter(latest[idx + 1], latest, repo);
   }
 
   const hasChapters = chapters.length > 0;
@@ -131,7 +250,11 @@ export default function HomeDashboard() {
         {/* SIDEBAR PANEL (shown once chapters exist) */}
         {hasChapters && (
           <Sidebar
-            chapters={chapters}
+            chapters={chapters.map((c) =>
+              loadingChapter && c.id === selectedChapter?.id && !c.content
+                ? { ...c, _loading: true }
+                : c
+            )}
             onSelectChapter={handleChapterSelect}
             selectedChapterId={selectedChapter?.id}
           />
@@ -221,11 +344,12 @@ export default function HomeDashboard() {
                   <div style={{ padding: "16px" }}>
                     <button
                       onClick={createChapters}
-                      style={{ width: "100%", padding: "13px", background: "linear-gradient(90deg, #b000ff, #d542ff)", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: "monospace", cursor: "pointer" }}
-                      onMouseEnter={e => ((e.currentTarget as HTMLElement).style.boxShadow = "0 0 20px rgba(190,41,236,0.4)")}
+                      disabled={generatingPlan}
+                      style={{ width: "100%", padding: "13px", background: generatingPlan ? "#111" : "linear-gradient(90deg, #b000ff, #d542ff)", color: generatingPlan ? "#555" : "#fff", border: "none", fontSize: 10, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: "monospace", cursor: generatingPlan ? "not-allowed" : "pointer" }}
+                      onMouseEnter={e => (!generatingPlan && ((e.currentTarget as HTMLElement).style.boxShadow = "0 0 20px rgba(190,41,236,0.4)"))}
                       onMouseLeave={e => ((e.currentTarget as HTMLElement).style.boxShadow = "none")}
                     >
-                      GENERATE TUTORIAL CHAPTERS →
+                      {generatingPlan ? "GENERATING OUTLINE..." : "GENERATE TUTORIAL CHAPTERS →"}
                     </button>
                   </div>
                 </div>

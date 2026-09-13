@@ -11,7 +11,10 @@ interface TutorialDetailsProps {
 export default function TutorialDetails({ chapter, isLoading }: TutorialDetailsProps) {
   const CELL = 28;
 
-  if (isLoading) {
+  // Full skeleton only when there's nothing to show yet.
+  // While streaming, chapter.content grows token-by-token and we render
+  // it progressively below instead of blocking on a spinner.
+  if (isLoading && !chapter?.content) {
     return (
       <div style={{ padding: "48px 48px", fontFamily: "monospace" }}>
         {/* skeleton header */}
@@ -149,8 +152,8 @@ export default function TutorialDetails({ chapter, isLoading }: TutorialDetailsP
 
       {/* next chapter footer */}
       <div style={{ marginTop: 64, paddingTop: 24, borderTop: "1px solid #1e1e1e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 9, color: "#333", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-          END OF CH.{String(chapter.id).padStart(2, "0")}
+        <span style={{ fontSize: 9, color: isLoading ? "#be29ec" : "#333", letterSpacing: "0.15em", textTransform: "uppercase" }}>
+          {isLoading ? "■ STREAMING..." : `END OF CH.${String(chapter.id).padStart(2, "0")}`}
         </span>
         <span style={{ fontSize: 9, color: "#333", letterSpacing: "0.15em", textTransform: "uppercase" }}>
           SELECT NEXT CHAPTER IN SIDEBAR →

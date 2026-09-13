@@ -70,6 +70,11 @@ type ChatMessage = {
   content: string;
 };
 
+export type StreamCallbacks = {
+  onToken?: (token: string) => void;
+  signal?: AbortSignal;
+};
+
 export async function chatCompletion(
   messages: ChatMessage[],
   opts?: { temperature?: number; max_tokens?: number; task?: GroqTask }
@@ -92,6 +97,52 @@ export async function chatCompletion(
       if (isModelNotFoundError(error)) {
         console.error(
           `Groq model "${model}" unavailable, trying fallback...`,
+          error?.error?.message || error?.message
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError ?? new Error("No Groq models available");
+}
+
+// Streaming variant: yields tokens as they arrive so the UI can render
+// progressively instead of waiting for the full completion (~10-20s).
+// Falls back to the next model only on model-not-found, same as chatCompletion.
+export async function streamChatCompletion(
+  messages: ChatMessage[],
+  opts?: { temperature?: number; max_tokens?: number; task?: GroqTask } & StreamCallbacks
+) {
+  const groq = getGroq();
+  const models = getModelsFor(opts?.task);
+  let lastError: any = null;
+
+  for (const model of models) {
+    try {
+      const stream = await groq.chat.completions.create({
+        model,
+        temperature: opts?.temperature ?? 0.5,
+        ...(opts?.max_tokens ? { max_tokens: opts.max_tokens } : {}),
+        messages,
+        stream: true,
+      });
+      let fullText = "";
+      for await (const chunk of stream) {
+        if (opts?.signal?.aborted) break;
+        const token = (chunk as any)?.choices?.[0]?.delta?.content || "";
+        if (token) {
+          fullText += token;
+          opts?.onToken?.(token);
+        }
+      }
+      return { content: fullText, model };
+    } catch (error: any) {
+      lastError = error;
+      if (isModelNotFoundError(error)) {
+        console.error(
+          `Groq model "${model}" unavailable (stream), trying fallback...`,
           error?.error?.message || error?.message
         );
         continue;

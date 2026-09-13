@@ -1,5 +1,7 @@
 import { chatCompletion } from "@/lib/groq";
 
+export const maxDuration = 30;
+
 function extractJSONArray(text: string) {
   const match = text.match(/\[[\s\S]*\]/);
   if (!match) throw new Error("No JSON array found");
@@ -17,15 +19,13 @@ export async function POST(req: Request) {
       );
     }
 
-    // 🔹 Build a clean repo map (paths only)
+    // 🔹 Build a clean repo map (paths only, capped for speed)
+    const allCodePaths = repoData.files.code.map((f: any) => f.path);
     const repoMap = {
       projectType: repoData.projectType,
-      client: repoData.files.code
-        .filter((f: any) => f.path.startsWith("client/"))
-        .map((f: any) => f.path),
-      server: repoData.files.code
-        .filter((f: any) => f.path.startsWith("server/"))
-        .map((f: any) => f.path),
+      fileCount: allCodePaths.length,
+      files: allCodePaths.slice(0, 300),
+      configs: (repoData.files.configs || []).map((f: any) => f.path).slice(0, 20),
     };
 
     const buildRepoChapterPrompt = (repoMap: any) => {
@@ -58,7 +58,7 @@ ${JSON.stringify(repoMap, null, 2)}
 `;
 
     }
-    const { completion } = await chatCompletion(
+    const { completion, model } = await chatCompletion(
       [
         { role: "system", content: "Output JSON only." },
         {
@@ -68,6 +68,7 @@ ${JSON.stringify(repoMap, null, 2)}
       ],
       { temperature: 0.2, max_tokens: 1000, task: "plan" }
     );
+    console.log(`Plan generated with model: ${model}`);
 
     const raw = completion.choices[0]?.message?.content ?? "";
     const chapters = extractJSONArray(raw);
